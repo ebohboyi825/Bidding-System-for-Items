@@ -1,4 +1,4 @@
-# 🏆 Bidding System for Items
+# 🏆 idding System for ItemsB
 
 A decentralized auction platform built on Stacks blockchain using Clarity smart contracts. Create auctions, place bids, and compete for items in a trustless environment! 
 
