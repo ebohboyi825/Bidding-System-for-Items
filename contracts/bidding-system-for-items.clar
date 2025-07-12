@@ -7,6 +7,7 @@
 (define-constant ERR-AUCTION-ALREADY-FINALIZED (err u106))
 (define-constant ERR-NO-BIDS (err u107))
 (define-constant ERR-TRANSFER-FAILED (err u108))
+(define-constant ERR-RESERVE-NOT-MET (err u109))
 
 (define-data-var auction-counter uint u0)
 
@@ -17,6 +18,7 @@
     item-name: (string-ascii 50),
     description: (string-ascii 200),
     starting-price: uint,
+    reserve-price: uint,
     current-bid: uint,
     highest-bidder: (optional principal),
     end-block: uint,
@@ -68,13 +70,21 @@
   )
 )
 
-(define-public (create-auction (item-name (string-ascii 50)) (description (string-ascii 200)) (starting-price uint) (duration uint))
+(define-read-only (is-reserve-met (auction-id uint))
+  (match (get-auction auction-id)
+    auction (>= (get current-bid auction) (get reserve-price auction))
+    false
+  )
+)
+
+(define-public (create-auction (item-name (string-ascii 50)) (description (string-ascii 200)) (starting-price uint) (reserve-price uint) (duration uint))
   (let
     (
       (auction-id (+ (var-get auction-counter) u1))
       (end-block (+ stacks-block-height duration))
     )
     (asserts! (> starting-price u0) ERR-BID-TOO-LOW)
+    (asserts! (>= reserve-price starting-price) ERR-BID-TOO-LOW)
     (asserts! (> duration u0) ERR-AUCTION-ENDED)
     
     (map-set auctions
@@ -84,6 +94,7 @@
         item-name: item-name,
         description: description,
         starting-price: starting-price,
+        reserve-price: reserve-price,
         current-bid: starting-price,
         highest-bidder: none,
         end-block: end-block,
@@ -155,6 +166,7 @@
     (match (get highest-bidder auction)
       winner
         (begin
+          (asserts! (>= current-bid (get reserve-price auction)) ERR-RESERVE-NOT-MET)
           (try! (as-contract (stx-transfer? current-bid tx-sender seller)))
           (map-set auctions
             { auction-id: auction-id }
@@ -233,6 +245,8 @@
         auction-id: auction-id,
         item-name: (get item-name auction),
         current-bid: (get current-bid auction),
+        reserve-price: (get reserve-price auction),
+        reserve-met: (is-reserve-met auction-id),
         highest-bidder: (get highest-bidder auction),
         time-remaining: (unwrap-panic (get-time-remaining auction-id)),
         status: (get-auction-status auction-id)
