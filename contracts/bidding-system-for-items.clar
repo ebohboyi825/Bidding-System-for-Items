@@ -9,6 +9,9 @@
 (define-constant ERR-TRANSFER-FAILED (err u108))
 (define-constant ERR-RESERVE-NOT-MET (err u109))
 
+(define-constant EXTENSION-WINDOW u10)
+(define-constant EXTENSION-DURATION u5)
+
 (define-data-var auction-counter uint u0)
 
 (define-map auctions
@@ -22,6 +25,8 @@
     current-bid: uint,
     highest-bidder: (optional principal),
     end-block: uint,
+    original-end-block: uint,
+    extension-count: uint,
     finalized: bool
   }
 )
@@ -77,6 +82,19 @@
   )
 )
 
+(define-read-only (is-in-extension-window (auction-id uint))
+  (match (get-auction auction-id)
+    auction 
+      (let ((blocks-remaining (- (get end-block auction) stacks-block-height)))
+        (and 
+          (< stacks-block-height (get end-block auction))
+          (<= blocks-remaining EXTENSION-WINDOW)
+        )
+      )
+    false
+  )
+)
+
 (define-public (create-auction (item-name (string-ascii 50)) (description (string-ascii 200)) (starting-price uint) (reserve-price uint) (duration uint))
   (let
     (
@@ -98,6 +116,8 @@
         current-bid: starting-price,
         highest-bidder: none,
         end-block: end-block,
+        original-end-block: end-block,
+        extension-count: u0,
         finalized: false
       }
     )
@@ -130,12 +150,20 @@
       true
     )
     
-    (map-set auctions
-      { auction-id: auction-id }
-      (merge auction {
-        current-bid: bid-amount,
-        highest-bidder: (some tx-sender)
-      })
+    (let ((should-extend (is-in-extension-window auction-id)))
+      (map-set auctions
+        { auction-id: auction-id }
+        (merge auction {
+          current-bid: bid-amount,
+          highest-bidder: (some tx-sender),
+          end-block: (if should-extend 
+                       (+ (get end-block auction) EXTENSION-DURATION)
+                       (get end-block auction)),
+          extension-count: (if should-extend 
+                             (+ (get extension-count auction) u1)
+                             (get extension-count auction))
+        })
+      )
     )
     
     (map-set bids
@@ -249,6 +277,8 @@
         reserve-met: (is-reserve-met auction-id),
         highest-bidder: (get highest-bidder auction),
         time-remaining: (unwrap-panic (get-time-remaining auction-id)),
+        extension-count: (get extension-count auction),
+        in-extension-window: (is-in-extension-window auction-id),
         status: (get-auction-status auction-id)
       })
     none
