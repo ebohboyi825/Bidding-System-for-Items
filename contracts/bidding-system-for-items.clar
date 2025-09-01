@@ -8,6 +8,7 @@
 (define-constant ERR-NO-BIDS (err u107))
 (define-constant ERR-TRANSFER-FAILED (err u108))
 (define-constant ERR-RESERVE-NOT-MET (err u109))
+(define-constant ERR-BUYOUT-TOO-LOW (err u110))
 
 (define-constant EXTENSION-WINDOW u10)
 (define-constant EXTENSION-DURATION u5)
@@ -22,6 +23,7 @@
     description: (string-ascii 200),
     starting-price: uint,
     reserve-price: uint,
+    buyout-price: (optional uint),
     current-bid: uint,
     highest-bidder: (optional principal),
     end-block: uint,
@@ -95,7 +97,7 @@
   )
 )
 
-(define-public (create-auction (item-name (string-ascii 50)) (description (string-ascii 200)) (starting-price uint) (reserve-price uint) (duration uint))
+(define-public (create-auction (item-name (string-ascii 50)) (description (string-ascii 200)) (starting-price uint) (reserve-price uint) (buyout-price (optional uint)) (duration uint))
   (let
     (
       (auction-id (+ (var-get auction-counter) u1))
@@ -104,6 +106,10 @@
     (asserts! (> starting-price u0) ERR-BID-TOO-LOW)
     (asserts! (>= reserve-price starting-price) ERR-BID-TOO-LOW)
     (asserts! (> duration u0) ERR-AUCTION-ENDED)
+    (match buyout-price
+      price (asserts! (>= price reserve-price) ERR-BUYOUT-TOO-LOW)
+      true
+    )
     
     (map-set auctions
       { auction-id: auction-id }
@@ -113,6 +119,7 @@
         description: description,
         starting-price: starting-price,
         reserve-price: reserve-price,
+        buyout-price: buyout-price,
         current-bid: starting-price,
         highest-bidder: none,
         end-block: end-block,
@@ -177,6 +184,54 @@
     )
     
     (ok true)
+  )
+)
+
+(define-public (buyout-auction (auction-id uint))
+  (let
+    (
+      (auction (unwrap! (get-auction auction-id) ERR-AUCTION-NOT-FOUND))
+      (seller (get seller auction))
+      (buyout-price-value (unwrap! (get buyout-price auction) ERR-BUYOUT-TOO-LOW))
+    )
+    (asserts! (not (is-eq tx-sender seller)) ERR-CANNOT-BID-OWN-AUCTION)
+    (asserts! (< stacks-block-height (get end-block auction)) ERR-AUCTION-ENDED)
+    (asserts! (not (get finalized auction)) ERR-AUCTION-ALREADY-FINALIZED)
+    
+    (try! (stx-transfer? buyout-price-value tx-sender (as-contract tx-sender)))
+    
+    (match (get highest-bidder auction)
+      previous-bidder
+        (begin
+          (try! (as-contract (stx-transfer? (get current-bid auction) tx-sender previous-bidder)))
+          true
+        )
+      true
+    )
+    
+    (try! (as-contract (stx-transfer? buyout-price-value tx-sender seller)))
+    
+    (map-set auctions
+      { auction-id: auction-id }
+      (merge auction {
+        current-bid: buyout-price-value,
+        highest-bidder: (some tx-sender),
+        finalized: true,
+        end-block: stacks-block-height
+      })
+    )
+    
+    (map-set bids
+      { auction-id: auction-id, bidder: tx-sender }
+      { amount: buyout-price-value, stacks-block-height: stacks-block-height }
+    )
+    
+    (map-set user-bids
+      { bidder: tx-sender }
+      { total-bids: (+ (get-user-bid-count tx-sender) u1) }
+    )
+    
+    (ok { winner: (some tx-sender), final-price: buyout-price-value })
   )
 )
 
@@ -274,6 +329,7 @@
         item-name: (get item-name auction),
         current-bid: (get current-bid auction),
         reserve-price: (get reserve-price auction),
+        buyout-price: (get buyout-price auction),
         reserve-met: (is-reserve-met auction-id),
         highest-bidder: (get highest-bidder auction),
         time-remaining: (unwrap-panic (get-time-remaining auction-id)),
