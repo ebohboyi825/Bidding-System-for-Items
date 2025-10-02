@@ -9,9 +9,11 @@
 (define-constant ERR-TRANSFER-FAILED (err u108))
 (define-constant ERR-RESERVE-NOT-MET (err u109))
 (define-constant ERR-BUYOUT-TOO-LOW (err u110))
+(define-constant ERR-INCREMENT-TOO-LOW (err u111))
 
 (define-constant EXTENSION-WINDOW u10)
 (define-constant EXTENSION-DURATION u5)
+(define-constant MIN-BID-INCREMENT-PERCENT u5)
 
 (define-data-var auction-counter uint u0)
 
@@ -97,6 +99,20 @@
   )
 )
 
+(define-read-only (get-minimum-next-bid (auction-id uint))
+  (match (get-auction auction-id)
+    auction 
+      (let 
+        (
+          (current-bid (get current-bid auction))
+          (increment (/ (* current-bid MIN-BID-INCREMENT-PERCENT) u100))
+        )
+        (+ current-bid increment)
+      )
+    u0
+  )
+)
+
 (define-public (create-auction (item-name (string-ascii 50)) (description (string-ascii 200)) (starting-price uint) (reserve-price uint) (buyout-price (optional uint)) (duration uint))
   (let
     (
@@ -140,10 +156,11 @@
       (auction (unwrap! (get-auction auction-id) ERR-AUCTION-NOT-FOUND))
       (current-bid (get current-bid auction))
       (seller (get seller auction))
+      (minimum-bid (get-minimum-next-bid auction-id))
     )
     (asserts! (not (is-eq tx-sender seller)) ERR-CANNOT-BID-OWN-AUCTION)
     (asserts! (< stacks-block-height (get end-block auction)) ERR-AUCTION-ENDED)
-    (asserts! (> bid-amount current-bid) ERR-BID-TOO-LOW)
+    (asserts! (>= bid-amount minimum-bid) ERR-INCREMENT-TOO-LOW)
     (asserts! (not (get finalized auction)) ERR-AUCTION-ALREADY-FINALIZED)
     
     (try! (stx-transfer? bid-amount tx-sender (as-contract tx-sender)))
@@ -328,6 +345,7 @@
         auction-id: auction-id,
         item-name: (get item-name auction),
         current-bid: (get current-bid auction),
+        minimum-next-bid: (get-minimum-next-bid auction-id),
         reserve-price: (get reserve-price auction),
         buyout-price: (get buyout-price auction),
         reserve-met: (is-reserve-met auction-id),
