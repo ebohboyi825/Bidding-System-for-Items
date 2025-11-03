@@ -358,3 +358,23 @@
     none
   )
 )
+
+(define-public (update-buyout (auction-id uint) (new-buyout uint))
+  (let
+    (
+      (auction (unwrap! (get-auction auction-id) ERR-AUCTION-NOT-FOUND))
+      (seller (get seller auction))
+      (has-bids (is-some (get highest-bidder auction)))
+    )
+    (asserts! (is-eq tx-sender seller) ERR-NOT-AUTHORIZED)
+    (asserts! (not (get finalized auction)) ERR-AUCTION-ALREADY-FINALIZED)
+    (asserts! (not has-bids) ERR-NO-BIDS)
+    (asserts! (>= new-buyout (get reserve-price auction)) ERR-BUYOUT-TOO-LOW)
+    (asserts! (>= new-buyout (get current-bid auction)) ERR-BUYOUT-TOO-LOW)
+    (map-set auctions
+      { auction-id: auction-id }
+      (merge auction { buyout-price: (some new-buyout) })
+    )
+    (ok true)
+  )
+)
